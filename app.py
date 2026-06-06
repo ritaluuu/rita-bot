@@ -177,7 +177,7 @@ def scheduler():
 
         # 週日到週四(weekday 0-3, 6) 傍晚17:00 台灣時間
         if tw_hour == 17 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
-            send_push(ACTIVITY_GROUP_ID, "請值日生預報今天活動量 gogogo 💪")
+            send_push(ACTIVITY_GROUP_ID, "請值日生預報明天和後天活動量 gogogo 💪")
             send_push(TODO_GROUP_ID, "請靜下心來預報明天的待辦事項 gogogo 🙏")
 
         threading.Event().wait(60)
