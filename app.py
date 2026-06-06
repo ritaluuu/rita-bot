@@ -1,15 +1,19 @@
 import os
 import re
+import threading
+from datetime import datetime
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
-    ReplyMessageRequest, TextMessage
+    ReplyMessageRequest, TextMessage, PushMessageRequest
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 app = Flask(__name__)
+
+GROUP_ID = "C036387647981e5c83e65884f9b9286b3"
 
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 CHANNEL_TOKEN = os.environ.get("LINE_CHANNEL_TOKEN", "")
@@ -141,6 +145,24 @@ def handle_message(event):
                     messages=[TextMessage(text=reply)]
                 )
             )
+
+def monthly_reminder():
+    while True:
+        now = datetime.utcnow()
+        # 台灣時間 = UTC+8，每月25號早上9點（UTC 1點）發送
+        if now.day == 25 and now.hour == 1 and now.minute == 0:
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=GROUP_ID,
+                        messages=[TextMessage(text="月底囉！\n請列好名單，並回報月目標 FYC 🎯")]
+                    )
+                )
+        threading.Event().wait(60)
+
+reminder_thread = threading.Thread(target=monthly_reminder, daemon=True)
+reminder_thread.start()
 
 if __name__ == "__main__":
     app.run(port=8080)
