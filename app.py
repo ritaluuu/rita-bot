@@ -13,7 +13,10 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 app = Flask(__name__)
 
-GROUP_ID = "C036387647981e5c83e65884f9b9286b3"
+GROUP_IDS = [
+    "C036387647981e5c83e65884f9b9286b3",
+    "Cdd2f9e9d113d33ed44251a4dd45d1ecd",
+]
 
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 CHANNEL_TOKEN = os.environ.get("LINE_CHANNEL_TOKEN", "")
@@ -153,12 +156,13 @@ def monthly_reminder():
         if now.day == 25 and now.hour == 1 and now.minute == 0:
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
-                line_bot_api.push_message(
-                    PushMessageRequest(
-                        to=GROUP_ID,
-                        messages=[TextMessage(text="月底囉！\n請列好名單，並回報月目標 FYC 🎯")]
+                for gid in GROUP_IDS:
+                    line_bot_api.push_message(
+                        PushMessageRequest(
+                            to=gid,
+                            messages=[TextMessage(text="月底囉！\n請列好名單，並回報月目標 FYC 🎯")]
+                        )
                     )
-                )
         threading.Event().wait(60)
 
 reminder_thread = threading.Thread(target=monthly_reminder, daemon=True)
