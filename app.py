@@ -149,23 +149,38 @@ def handle_message(event):
                 )
             )
 
-def monthly_reminder():
+ACTIVITY_GROUP_ID = "C036387647981e5c83e65884f9b9286b3"
+
+def send_push(group_id, message):
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.push_message(
+            PushMessageRequest(
+                to=group_id,
+                messages=[TextMessage(text=message)]
+            )
+        )
+
+def scheduler():
     while True:
         now = datetime.utcnow()
-        # 台灣時間 = UTC+8，每月25號早上9點（UTC 1點）發送
-        if now.day == 25 and now.hour == 1 and now.minute == 0:
-            with ApiClient(configuration) as api_client:
-                line_bot_api = MessagingApi(api_client)
-                for gid in GROUP_IDS:
-                    line_bot_api.push_message(
-                        PushMessageRequest(
-                            to=gid,
-                            messages=[TextMessage(text="月底囉！\n請列好名單，並回報月目標 FYC 🎯")]
-                        )
-                    )
+        # 台灣時間 = UTC+8
+        tw_hour = (now.hour + 8) % 24
+        tw_minute = now.minute
+        tw_weekday = now.weekday()  # 0=週一, 6=週日
+
+        # 每月25號早上9點推播（UTC 1點）
+        if now.day == 25 and now.hour == 1 and tw_minute == 0:
+            for gid in GROUP_IDS:
+                send_push(gid, "月底囉！\n請列好名單，並回報月目標 FYC 🎯")
+
+        # 週日到週四(weekday 0-3, 6) 傍晚17:00 台灣時間
+        if tw_hour == 17 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
+            send_push(ACTIVITY_GROUP_ID, "請值日生預報今天活動量 gogogo 💪")
+
         threading.Event().wait(60)
 
-reminder_thread = threading.Thread(target=monthly_reminder, daemon=True)
+reminder_thread = threading.Thread(target=scheduler, daemon=True)
 reminder_thread.start()
 
 if __name__ == "__main__":
