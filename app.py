@@ -1,8 +1,11 @@
 import os
 import re
+import json
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, abort
+import gspread
+from google.oauth2.service_account import Credentials
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
@@ -337,6 +340,182 @@ def analyze_birthday(birthday_str):
 
 app = Flask(__name__)
 
+# ───────────────────────────────────────────────
+# 📊 Google Sheets 設定
+# ───────────────────────────────────────────────
+
+SPREADSHEET_ID = "1Ncy3e8I_OaC3BhTl_SNzJeFWMOQMFuEhaOK8Rl1hUV0"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+def get_sheet_client():
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+    if creds_json:
+        creds_dict = json.loads(creds_json)
+    else:
+        with open("google-credentials.json") as f:
+            creds_dict = json.load(f)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+def get_or_create_worksheet(gc, month_str):
+    """取得或建立月份分頁，例如 '2026-06'"""
+    try:
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        try:
+            ws = sh.worksheet(month_str)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=month_str, rows=1000, cols=10)
+            ws.append_row(["日期", "業務員", "時間", "類型"])
+        return ws
+    except Exception as e:
+        print(f"Sheets error: {e}")
+        return None
+
+def write_activities_to_sheet(date_str, activities):
+    """寫入活動量到試算表"""
+    try:
+        gc = get_sheet_client()
+        # date_str 格式：06/05，month_str：2026-06
+        now = datetime.utcnow()
+        tw_now = now + timedelta(hours=8)
+        month_str = tw_now.strftime("%Y-%m")
+        ws = get_or_create_worksheet(gc, month_str)
+        if ws:
+            for row in activities:
+                ws.append_row(row)
+        return True
+    except Exception as e:
+        print(f"Write sheet error: {e}")
+        return False
+
+def parse_activity_report(text):
+    """
+    解析活動預報格式，回傳 (date_str, rows_list)
+    格式：
+    1150605
+    Rita：0
+    一珊：1300需 1830關
+    """
+    lines = text.strip().split("\n")
+    if not lines:
+        return None, []
+
+    # 第一行是日期，例如 1150605 或 150605
+    date_line = lines[0].strip()
+    date_match = re.match(r"1?(\d{2})(\d{2})(\d{2})", date_line)
+    if not date_match:
+        return None, []
+
+    year_short = date_match.group(1)
+    month = date_match.group(2)
+    day = date_match.group(3)
+    date_str = f"{month}/{day}"  # 顯示用
+    full_year = str(1911 + int(year_short))  # 西元年
+    date_full = f"{full_year}-{month}-{day}"
+
+    rows = []
+    names_no_activity = []
+
+    for line in lines[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        # 格式：名字：內容
+        m = re.match(r"^(.+?)：(.*)$", line)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        content = m.group(2).strip()
+
+        if content == "0" or content == "":
+            names_no_activity.append(name)
+            continue
+
+        # 解析每個時間+類型，例如 "1300需 1830關" 或 "17:30建"
+        slots = re.findall(r"(\d{1,2}:?\d{2})([關需建簽服])", content)
+        for time_raw, visit_type in slots:
+            # 統一格式為 HH:MM
+            time_clean = time_raw.replace(":", "")
+            if len(time_clean) == 3:
+                time_clean = "0" + time_clean
+            time_fmt = time_clean[:2] + ":" + time_clean[2:]
+            rows.append([date_full, name, time_fmt, visit_type])
+
+    return date_str, rows, names_no_activity
+
+def query_stats(name, start_date, end_date):
+    """查詢某人在日期範圍內的統計"""
+    try:
+        gc = get_sheet_client()
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        worksheets = sh.worksheets()
+
+        total = 0
+        type_count = {}
+
+        for ws in worksheets:
+            if ws.title == "工作表1":
+                continue
+            records = ws.get_all_records()
+            for row in records:
+                row_name = str(row.get("業務員", "")).strip()
+                row_date = str(row.get("日期", "")).strip()
+                row_type = str(row.get("類型", "")).strip()
+
+                if row_name != name:
+                    continue
+                try:
+                    rd = datetime.strptime(row_date, "%Y-%m-%d").date()
+                    if start_date <= rd <= end_date:
+                        total += 1
+                        type_count[row_type] = type_count.get(row_type, 0) + 1
+                except:
+                    continue
+
+        return total, type_count
+    except Exception as e:
+        print(f"Query error: {e}")
+        return None, None
+
+def query_weekly_stats():
+    """查詢本週所有人統計"""
+    try:
+        gc = get_sheet_client()
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        worksheets = sh.worksheets()
+
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        # 本週週日到週六
+        weekday = tw_now.weekday()  # 0=週一
+        start = (tw_now - timedelta(days=(weekday + 1) % 7)).date()
+        end = tw_now.date()
+
+        stats = {}  # {name: {type: count}}
+
+        for ws in worksheets:
+            if ws.title == "工作表1":
+                continue
+            records = ws.get_all_records()
+            for row in records:
+                name = str(row.get("業務員", "")).strip()
+                row_date = str(row.get("日期", "")).strip()
+                row_type = str(row.get("類型", "")).strip()
+                if not name:
+                    continue
+                try:
+                    rd = datetime.strptime(row_date, "%Y-%m-%d").date()
+                    if start <= rd <= end:
+                        if name not in stats:
+                            stats[name] = {}
+                        stats[name][row_type] = stats[name].get(row_type, 0) + 1
+                except:
+                    continue
+
+        return stats, start, end
+    except Exception as e:
+        print(f"Weekly query error: {e}")
+        return None, None, None
+
 GROUP_IDS = [
     "C036387647981e5c83e65884f9b9286b3",
     "Cdd2f9e9d113d33ed44251a4dd45d1ecd",
@@ -425,8 +604,42 @@ def handle_message(event):
         else:
             reply = f"這是私訊，沒有群組ID\n你的用戶ID：{source.user_id}"
 
+    # 個人查詢：查詢：Rita 0605-0615
+    elif re.match(r"^查詢[：:](.+?)\s+(\d{4})-(\d{4})$", text):
+        m = re.match(r"^查詢[：:](.+?)\s+(\d{4})-(\d{4})$", text)
+        name = m.group(1).strip()
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        year = tw_now.year
+        try:
+            start = datetime.strptime(f"{year}{m.group(2)}", "%Y%m%d").date()
+            end = datetime.strptime(f"{year}{m.group(3)}", "%Y%m%d").date()
+            total, type_count = query_stats(name, start, end)
+            if total is None:
+                reply = "❌ 查詢失敗，請稍後再試"
+            elif total == 0:
+                reply = f"📊 {name} {m.group(2)}-{m.group(3)}\n查無資料"
+            else:
+                detail = " ".join([f"{t}{c}次" for t, c in sorted(type_count.items())])
+                reply = f"📊 {name} {m.group(2)}－{m.group(3)}\n總拜訪：{total}次\n  {detail}"
+        except:
+            reply = "❌ 日期格式錯誤，請輸入如：查詢：Rita 0605-0615"
+
+    elif text == "本週統計" or text == "週報":
+        stats, start, end = query_weekly_stats()
+        if not stats:
+            reply = "❌ 查詢失敗，請稍後再試"
+        elif not stats:
+            reply = "本週尚無活動量記錄"
+        else:
+            lines = [f"📊 本週活動量 {start.strftime('%m/%d')}－{end.strftime('%m/%d')}\n"]
+            for name, tc in stats.items():
+                total = sum(tc.values())
+                detail = " ".join([f"{t}{c}" for t, c in sorted(tc.items())])
+                lines.append(f"{name}：{total}次（{detail}）")
+            reply = "\n".join(lines)
+
     elif text == "今天進度" or text == "全隊進度":
-        reply = "📊 功能開發中，敬請期待！\n（未來可查看全隊今日拜訪狀況）"
+        reply = "📊 請輸入「本週統計」查看全隊活動量！"
 
     elif text == "我的待辦" or text == "待辦事項":
         reply = "📝 功能開發中，敬請期待！\n（未來可查看個人未完成待辦）"
@@ -484,13 +697,22 @@ def handle_message(event):
                 reply = tip
                 break
 
-        # 如果是拜訪預報格式
-        if not reply and ("：" in text or ":" in text):
-            lines = text.split("\n")
-            if len(lines) >= 2:
-                parsed = parse_visit_report(text)
-                if parsed:
-                    reply = "✅ 收到拜訪預報！\n\n" + "\n".join(parsed)
+        # 如果是活動預報格式（第一行是日期數字）
+        if not reply:
+            first_line = text.split("\n")[0].strip()
+            if re.match(r"^1?\d{5,6}", first_line) and "\n" in text:
+                date_str, rows, no_activity = parse_activity_report(text)
+                if date_str:
+                    # 寫入試算表
+                    if rows:
+                        write_activities_to_sheet(date_str, rows)
+                    # 回覆確認
+                    confirm_lines = [f"✅ 活動預報已記錄！（{date_str}）\n"]
+                    for r in rows:
+                        confirm_lines.append(f"  {r[1]} {r[2]} {r[3]}")
+                    if no_activity:
+                        confirm_lines.append("\n  休息：" + "、".join(no_activity))
+                    reply = "\n".join(confirm_lines)
 
     if reply:
         with ApiClient(configuration) as api_client:
@@ -532,6 +754,18 @@ def scheduler():
         if tw_hour == 17 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
             send_push(ACTIVITY_GROUP_ID, "請值日生預報明天和後天活動量 gogogo 💪")
             send_push(TODO_GROUP_ID, "請靜下心來預報明天的待辦事項 gogogo 🙏")
+
+        # 每週日早上9點（UTC 1點）推播週報
+        if tw_weekday == 6 and tw_hour == 9 and tw_minute == 0:
+            stats, start, end = query_weekly_stats()
+            if stats:
+                lines = [f"📊 本週活動量統計 {start.strftime('%m/%d')}－{end.strftime('%m/%d')}\n"]
+                for name, tc in stats.items():
+                    total = sum(tc.values())
+                    detail = " ".join([f"{t}{c}" for t, c in sorted(tc.items())])
+                    lines.append(f"{name}：{total}次（{detail}）")
+                msg = "\n".join(lines)
+                send_push(ACTIVITY_GROUP_ID, msg)
 
         threading.Event().wait(60)
 
