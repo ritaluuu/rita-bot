@@ -818,12 +818,26 @@ def scheduler():
             for gid in GROUP_IDS:
                 send_push(gid, "月底囉！\n請列好名單，並回報月目標 FYC 🎯")
 
-        # 週日到週四(weekday 0-3, 6) 傍晚17:00 台灣時間
+        # 週日到週四(weekday 0-3, 6) 早上9:00 提醒值日生發模板
+        if tw_hour == 9 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
+            send_push(ACTIVITY_GROUP_ID, "📋 值日生請發今明兩天活動預報模板！")
+
+        # 週日到週四(weekday 0-3, 6) 傍晚17:00 提醒預報
         if tw_hour == 17 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
             send_push(ACTIVITY_GROUP_ID, "請值日生預報明天和後天活動量 gogogo 💪")
             send_push(TODO_GROUP_ID, "請靜下心來預報明天的待辦事項 gogogo 🙏")
 
-        # 每週日早上9點（UTC 1點）推播週報
+        # 週日到週四 晚上20:00 缺報點名
+        if tw_hour == 20 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
+            tw_now = now + timedelta(hours=8)
+            today = tw_now.strftime("%Y-%m-%d")
+            reported_today = reported.get(ACTIVITY_GROUP_ID, {}).get(today, set())
+            missing = [m for m in TEAM_MEMBERS if m not in reported_today]
+            if missing:
+                names = "、".join(missing)
+                send_push(ACTIVITY_GROUP_ID, f"⏰ 提醒：{names} 還沒回報今天活動量喔！")
+
+        # 每週日早上9點推播週報（UTC 1點）
         if tw_weekday == 6 and tw_hour == 9 and tw_minute == 0:
             stats, start, end = query_weekly_stats()
             if stats:
