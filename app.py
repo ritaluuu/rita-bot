@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import random
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, request, abort
@@ -346,6 +347,68 @@ app = Flask(__name__)
 
 SPREADSHEET_ID = "1Ncy3e8I_OaC3BhTl_SNzJeFWMOQMFuEhaOK8Rl1hUV0"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+# ───────────────────────────────────────────────
+# 💪 鼓勵語句
+# ───────────────────────────────────────────────
+
+CHEER_MESSAGES = [
+    # 🌸 溫暖療癒型
+    "你已經很努力了，休息一下也沒關係 🌸",
+    "每一次被拒絕，都是離成交更近一步 💕",
+    "今天辛苦了，明天又是新的開始 🌅",
+    "你的堅持，客戶都看在眼裡 🤍",
+    "不是每顆種子都馬上發芽，但你種的每一顆都算數 🌱",
+    "慢慢來，你比你想的更有力量 💪",
+    "照顧好自己，才能照顧好客戶 🫶",
+    "今天的低潮，是明天突破的前兆 🌈",
+    "你不是一個人在戰鬥，我們都在 🤝",
+    "感覺累的時候，代表你一直都在認真 ✨",
+    "沒有白走的路，每一步都在累積 👣",
+    "休息是為了走更長的路，給自己一點溫柔 🍵",
+    "你選擇了一份有意義的工作，這本身就很了不起 🌟",
+    "今天的你，比昨天的你更強了 💛",
+    "深呼吸，你可以的 🌬️",
+    # 🔥 熱血激勵型
+    "困難是成長的燃料，加滿油繼續衝！🔥",
+    "業績不會從天上掉下來，但努力的人會把它追下來！💥",
+    "拒絕你的客戶只是還沒準備好，你的任務是等他準備好！⚡️",
+    "冠軍不是天生的，是每天逼自己一點點練出來的！🏆",
+    "今天的汗水，就是明天的獎金！💰",
+    "沒有人能阻止一個下定決心的業務員！🦁",
+    "打電話前深呼吸，你的聲音就是你的武器！📞",
+    "每一個「不要」背後，都藏著一個「還沒」！🎯",
+    "業務的字典裡沒有「放棄」，只有「再試一次」！🚀",
+    "你不是在賣保險，你是在幫客戶保護最重要的人！❤️‍🔥",
+    "今天多打一通電話，就多一個機會！📲",
+    "失敗是暫時的，放棄才是永久的！💪",
+    "比你優秀的人還在努力，你有什麼理由停下來？⚡️",
+    "每一次出門拜訪，都是在投資未來的自己！🌠",
+    "高手跟普通人的差別，只是多堅持了一點點！🏅",
+    "今天的挑戰，是你明天說故事的材料！📖",
+    "被拒絕10次，第11次就是成交！🎰",
+    "你是客戶最需要的人，只是他還不知道！💡",
+    "不逼自己一把，你不知道自己有多強！⚡️",
+    "衝！今天的努力，你未來的自己會感謝你！🙌",
+    # 😄 幽默輕鬆型
+    "保險業務員不倒翁，彈起來繼續！😄",
+    "客戶說不要？沒關係，下一位！（下一位才是真命天子）😂",
+    "今天被拒絕了幾次？恭喜你，你又離成交更近了幾步！🎊",
+    "保險業務的超能力：被拒絕後5秒鐘恢復滿血！⚡️😎",
+    "業務員的一天：被拒絕、被拒絕、被拒絕、成交！撒花🎉",
+    "打電話緊張？客戶又不會從電話裡跳出來打你😂",
+    "今天沒成交？那是因為今天的任務是「種種子」🌱",
+    "業務員進化論：菜鳥→被拒絕→再被拒絕→成為高手😆",
+    "記住：每個頂尖業務員都曾經是被拒絕最多次的那個！🏆",
+    "今天好累？表示你今天有在動！躺著才不會累😄",
+    "客戶說「我再想想」= 我還需要你多關心我一下😂",
+    "保險業務員的早餐：一碗被拒絕加一杯正能量，營養均衡！☕️",
+    "你不是在推銷，你是在「拯救世界」（認真的）🦸",
+    "沮喪的時候想想：你的存在讓多少家庭多了一份保障 😊",
+    "今天的你已經很棒了，明天的你會更棒，後天更更棒！📈",
+]
+
+CHEER_KEYWORDS = ["加油", "好累", "沮喪", "挫折", "好難", "放棄", "不想做", "撐不住", "好煩", "壓力"]
 
 # 團隊成員名單
 TEAM_MEMBERS = ["Rita", "一珊", "力緯", "致齊", "瑋娟", "彥汝"]
@@ -718,11 +781,18 @@ def handle_message(event):
         )
 
     else:
-        # 關鍵字偵測
-        for keyword, tip in KEYWORD_TIPS.items():
+        # 鼓勵關鍵字
+        for keyword in CHEER_KEYWORDS:
             if keyword in text:
-                reply = tip
+                reply = random.choice(CHEER_MESSAGES)
                 break
+
+        # 業務關鍵字偵測
+        if not reply:
+            for keyword, tip in KEYWORD_TIPS.items():
+                if keyword in text:
+                    reply = tip
+                    break
 
         # 活動預報處理
         if not reply:
@@ -842,10 +912,17 @@ def scheduler():
             stats, start, end = query_weekly_stats()
             if stats:
                 lines = [f"📊 本週活動量統計 {start.strftime('%m/%d')}－{end.strftime('%m/%d')}\n"]
+                mvp_name = None
+                mvp_count = 0
                 for name, tc in stats.items():
                     total = sum(tc.values())
                     detail = " ".join([f"{t}{c}" for t, c in sorted(tc.items())])
                     lines.append(f"{name}：{total}次（{detail}）")
+                    if total > mvp_count:
+                        mvp_count = total
+                        mvp_name = name
+                if mvp_name:
+                    lines.append(f"\n🏆 本週MVP：{mvp_name}！繼續衝 ⭐️")
                 msg = "\n".join(lines)
                 send_push(ACTIVITY_GROUP_ID, msg)
 
