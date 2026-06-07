@@ -525,8 +525,10 @@ def parse_template_report(text):
         content = m.group(2).strip()
         if name not in TEAM_MEMBERS:
             continue
-        if content == "" or content == "0":
-            result[name] = []  # 休息或空白
+        if content == "":
+            result[name] = None  # 空白 = 尚未填寫
+        elif content == "0":
+            result[name] = []   # 0 = 今天休息，算已回報
         else:
             rows = parse_time_slots(content, date_full, name)
             result[name] = rows
@@ -816,10 +818,11 @@ def handle_message(event):
                     if date_full not in reported[gid]:
                         reported[gid][date_full] = set()
 
-                    # 寫入有資料的成員
+                    # 寫入有資料的成員（空白不算已回報）
                     for name, rows in member_data.items():
-                        write_activities_to_sheet(date_full, name, rows if rows else [])
-                        reported[gid][date_full].add(name)
+                        if rows is not None:  # None = 空白未填，[] = 填了0
+                            write_activities_to_sheet(date_full, name, rows)
+                            reported[gid][date_full].add(name)
 
                     # 檢查是否全員到齊
                     if set(TEAM_MEMBERS) == reported[gid][date_full]:
