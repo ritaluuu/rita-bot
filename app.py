@@ -454,13 +454,22 @@ def parse_time_slots(content, date_full, name):
     return rows
 
 def roc_to_ad(roc_date_str):
-    """民國日期轉西元，例如 1150605 → (2026-06-05, 06/05)"""
-    m = re.match(r"^(1\d{2})(\d{2})(\d{2})$", roc_date_str.strip())
-    if not m:
-        return None, None
-    year_roc = int(m.group(1))
-    month = m.group(2)
-    day = m.group(3)
+    """民國日期轉西元，支援 1150605（7位）或 150605（6位）"""
+    s = roc_date_str.strip()
+    # 7位：1150605
+    m = re.match(r"^(1\d{2})(\d{2})(\d{2})$", s)
+    if m:
+        year_roc = int(m.group(1))
+        month = m.group(2)
+        day = m.group(3)
+    else:
+        # 6位：150605（補1變成115）
+        m = re.match(r"^(\d{2})(\d{2})(\d{2})$", s)
+        if not m:
+            return None, None
+        year_roc = int("1" + m.group(1))
+        month = m.group(2)
+        day = m.group(3)
     year_ad = 1911 + year_roc
     return f"{year_ad}-{month}-{day}", f"{month}/{day}"
 
@@ -808,29 +817,30 @@ def handle_message(event):
             first_line = text.split("\n")[0].strip()
 
             # 情況一：值日生發完整模板（第一行是民國日期）
-            if re.match(r"^1\d{6}$", first_line) and "\n" in text:
-                date_full, date_display, member_data = parse_template_report(text)
-                if not date_full:
-                    reply = f"❌ 日期解析失敗：{repr(first_line)}"
-                elif not member_data:
-                    reply = f"❌ 成員解析失敗，date={date_full}"
-                if date_full:
-                    # 更新最新日期
+            if re.match(r"^1?\d{6}$", first_line) and "\n" in text:
+                # 支援兩天一起PO：用日期行分割成多個區塊
+                blocks = re.split(r"(?=^1?\d{6}$)", text, flags=re.MULTILINE)
+                blocks = [b.strip() for b in blocks if b.strip()]
+                for block in blocks:
+                    block_first = block.split("\n")[0].strip()
+                    if not re.match(r"^1?\d{6}", block_first):
+                        continue
+                    date_full, date_display, member_data = parse_template_report(block)
+                    if not date_full:
+                        continue
                     latest_date[gid] = date_full
                     if gid not in reported:
                         reported[gid] = {}
                     if date_full not in reported[gid]:
                         reported[gid][date_full] = set()
-
-                    # 寫入有資料的成員（空白不算已回報）
                     for name, rows in member_data.items():
-                        if rows is not None:  # None = 空白未填，[] = 填了0
+                        if rows is not None:
                             write_activities_to_sheet(date_full, name, rows)
                             reported[gid][date_full].add(name)
-
-                    # 檢查是否全員到齊
                     if set(TEAM_MEMBERS) == reported[gid][date_full]:
-                        reply = f"✅ {date_display} 全員活動預報完成！"
+                        reply = (reply or "") + f"✅ {date_display} 全員活動預報完成！\n"
+                if reply:
+                    reply = reply.strip()
 
             # 情況二：單行接龍（名字：內容）
             elif re.match(r"^.+?[：:]", text) and "\n" not in text:
