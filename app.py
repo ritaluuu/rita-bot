@@ -1094,15 +1094,29 @@ def scheduler():
                     todo_msg += f"\n{name}：" + "／".join(items)
             send_push(TODO_GROUP_ID, todo_msg)
 
-        # 週日到週四 晚上20:00 缺報點名
+        # 週日到週四 晚上20:00 缺報點名（查試算表）
         if tw_hour == 20 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
-            tw_now = now + timedelta(hours=8)
-            today = tw_now.strftime("%Y-%m-%d")
-            reported_today = reported.get(ACTIVITY_GROUP_ID, {}).get(today, set())
-            missing = [m for m in TEAM_MEMBERS if m not in reported_today]
-            if missing:
-                names = "、".join(missing)
-                send_push(ACTIVITY_GROUP_ID, f"⏰ 提醒：{names} 還沒回報今天活動量喔！")
+            try:
+                tw_now_dt = now + timedelta(hours=8)
+                today = tw_now_dt.strftime("%Y-%m-%d")
+                year_month = today[:7]
+                gc = get_sheet_client()
+                sh = gc.open_by_key(SPREADSHEET_ID)
+                try:
+                    ws = sh.worksheet(year_month)
+                    all_values = ws.get_all_values()
+                    reported_today = set()
+                    for row in all_values[1:]:
+                        if len(row) >= 2 and row[0] == today:
+                            reported_today.add(row[1])
+                except:
+                    reported_today = set()
+                missing = [m for m in TEAM_MEMBERS if m not in reported_today]
+                if missing:
+                    names = "、".join(missing)
+                    send_push(ACTIVITY_GROUP_ID, f"⏰ 提醒：{names} 還沒回報今天活動量喔！")
+            except Exception as e:
+                print(f"[缺報點名] ❌ {e}")
 
         # 每週日早上9點推播週報（UTC 1點）
         if tw_weekday == 6 and tw_hour == 9 and tw_minute == 0:
