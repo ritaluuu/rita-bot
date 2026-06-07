@@ -808,10 +808,12 @@ def handle_message(event):
             first_line = text.split("\n")[0].strip()
 
             # 情況一：值日生發完整模板（第一行是民國日期）
-            print(f"[DEBUG] first_line={repr(first_line)}, has_newline={chr(10) in text}")
             if re.match(r"^1\d{6}$", first_line) and "\n" in text:
                 date_full, date_display, member_data = parse_template_report(text)
-                print(f"[DEBUG] date_full={date_full}, members={list(member_data.keys()) if member_data else None}")
+                if not date_full:
+                    reply = f"❌ 日期解析失敗：{repr(first_line)}"
+                elif not member_data:
+                    reply = f"❌ 成員解析失敗，date={date_full}"
                 if date_full:
                     # 更新最新日期
                     latest_date[gid] = date_full
