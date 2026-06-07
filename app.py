@@ -347,6 +347,13 @@ app = Flask(__name__)
 SPREADSHEET_ID = "1Ncy3e8I_OaC3BhTl_SNzJeFWMOQMFuEhaOK8Rl1hUV0"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# 團隊成員名單
+TEAM_MEMBERS = ["Rita", "一珊", "力緯", "致齊", "瑋娟", "彥汝"]
+
+# 記錄最近日期 & 各日期已回報成員（記憶體暫存）
+latest_date = {}       # {group_id: "2026-06-05"}
+reported = {}          # {group_id: {date_full: set(names)}}
+
 def get_sheet_client():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
     if creds_json:
@@ -371,77 +378,115 @@ def get_or_create_worksheet(gc, month_str):
         print(f"Sheets error: {e}")
         return None
 
-def write_activities_to_sheet(date_str, activities):
-    """寫入活動量到試算表"""
+def parse_time_slots(content, date_full, name):
+    """解析 '1300需 1830關' 這種格式，回傳 rows"""
+    rows = []
+    slots = re.findall(r"(\d{1,2}:?\d{2})\s*([關需建簽服])", content)
+    for time_raw, visit_type in slots:
+        time_clean = time_raw.replace(":", "")
+        if len(time_clean) == 3:
+            time_clean = "0" + time_clean
+        time_fmt = time_clean[:2] + ":" + time_clean[2:]
+        rows.append([date_full, name, time_fmt, visit_type])
+    return rows
+
+def roc_to_ad(roc_date_str):
+    """民國日期轉西元，例如 1150605 → (2026-06-05, 06/05)"""
+    m = re.match(r"^(1\d{2})(\d{2})(\d{2})$", roc_date_str.strip())
+    if not m:
+        return None, None
+    year_roc = int(m.group(1))
+    month = m.group(2)
+    day = m.group(3)
+    year_ad = 1911 + year_roc
+    return f"{year_ad}-{month}-{day}", f"{month}/{day}"
+
+def write_activities_to_sheet(date_full, name, rows):
+    """覆蓋寫入：先刪除同日期同人的舊資料，再寫入新資料"""
     try:
         gc = get_sheet_client()
-        # date_str 格式：06/05，month_str：2026-06
-        now = datetime.utcnow()
-        tw_now = now + timedelta(hours=8)
-        month_str = tw_now.strftime("%Y-%m")
-        ws = get_or_create_worksheet(gc, month_str)
-        if ws:
-            for row in activities:
-                ws.append_row(row)
+        year_month = date_full[:7]  # "2026-06"
+        ws = get_or_create_worksheet(gc, year_month)
+        if not ws:
+            return False
+
+        # 讀取所有資料，找出要刪除的列（從後往前刪）
+        all_values = ws.get_all_values()
+        rows_to_delete = []
+        for i, row in enumerate(all_values):
+            if i == 0:  # 標題列
+                continue
+            if len(row) >= 2 and row[0] == date_full and row[1] == name:
+                rows_to_delete.append(i + 1)  # gspread 從1開始
+
+        for row_idx in reversed(rows_to_delete):
+            ws.delete_rows(row_idx)
+
+        # 寫入新資料（0代表休息，不寫入）
+        for row in rows:
+            ws.append_row(row)
         return True
     except Exception as e:
         print(f"Write sheet error: {e}")
         return False
 
-def parse_activity_report(text):
+def parse_template_report(text):
     """
-    解析活動預報格式，回傳 (date_str, rows_list)
-    格式：
-    1150605
-    Rita：0
-    一珊：1300需 1830關
+    解析值日生發的完整模板，例如：
+    1150603
+    Rita：1240服
+    一珊：
+    力緯：0
+    回傳 (date_full, date_display, {name: rows_or_None})
     """
     lines = text.strip().split("\n")
     if not lines:
-        return None, []
+        return None, None, {}
 
-    # 第一行是日期，例如 1150605 或 150605
-    date_line = lines[0].strip()
-    date_match = re.match(r"1?(\d{2})(\d{2})(\d{2})", date_line)
-    if not date_match:
-        return None, []
+    date_full, date_display = roc_to_ad(lines[0].strip())
+    if not date_full:
+        return None, None, {}
 
-    year_short = date_match.group(1)
-    month = date_match.group(2)
-    day = date_match.group(3)
-    date_str = f"{month}/{day}"  # 顯示用
-    full_year = str(1911 + int(year_short))  # 西元年
-    date_full = f"{full_year}-{month}-{day}"
-
-    rows = []
-    names_no_activity = []
-
+    result = {}
     for line in lines[1:]:
         line = line.strip()
         if not line:
             continue
-        # 格式：名字：內容
-        m = re.match(r"^(.+?)：(.*)$", line)
+        m = re.match(r"^(.+?)[\s　]*[：:](.*)$", line)
         if not m:
             continue
         name = m.group(1).strip()
         content = m.group(2).strip()
-
-        if content == "0" or content == "":
-            names_no_activity.append(name)
+        if name not in TEAM_MEMBERS:
             continue
+        if content == "" or content == "0":
+            result[name] = []  # 休息或空白
+        else:
+            rows = parse_time_slots(content, date_full, name)
+            result[name] = rows
 
-        # 解析每個時間+類型，例如 "1300需 1830關" 或 "17:30建"
-        slots = re.findall(r"(\d{1,2}:?\d{2})([關需建簽服])", content)
-        for time_raw, visit_type in slots:
-            # 統一格式為 HH:MM
-            time_clean = time_raw.replace(":", "")
-            if len(time_clean) == 3:
-                time_clean = "0" + time_clean
-            time_fmt = time_clean[:2] + ":" + time_clean[2:]
-            rows.append([date_full, name, time_fmt, visit_type])
+    return date_full, date_display, result
 
-    return date_str, rows, names_no_activity
+def parse_single_reply(text, date_full):
+    """
+    解析單行接龍回報，例如：一珊：1300需 1830關
+    回傳 (name, rows) 或 (None, None)
+    """
+    text = text.strip()
+    m = re.match(r"^(.+?)[\s　]*[：:](.*)$", text)
+    if not m:
+        return None, None
+    name = m.group(1).strip()
+    content = m.group(2).strip()
+    if name not in TEAM_MEMBERS:
+        return None, None
+    if content == "" or content == "0":
+        return name, []
+    rows = parse_time_slots(content, date_full, name)
+    # 有內容但解析不出時間+類型 → 格式錯誤
+    if not rows:
+        return name, None  # None 代表格式錯誤
+    return name, rows
 
 def query_stats(name, start_date, end_date):
     """查詢某人在日期範圍內的統計"""
@@ -697,22 +742,63 @@ def handle_message(event):
                 reply = tip
                 break
 
-        # 如果是活動預報格式（第一行是日期數字）
+        # 活動預報處理
         if not reply:
+            # 取得群組ID（私訊也支援）
+            source = event.source
+            gid = getattr(source, 'group_id', getattr(source, 'user_id', 'private'))
+
             first_line = text.split("\n")[0].strip()
-            if re.match(r"^1?\d{5,6}", first_line) and "\n" in text:
-                date_str, rows, no_activity = parse_activity_report(text)
-                if date_str:
-                    # 寫入試算表
-                    if rows:
-                        write_activities_to_sheet(date_str, rows)
-                    # 回覆確認
-                    confirm_lines = [f"✅ 活動預報已記錄！（{date_str}）\n"]
-                    for r in rows:
-                        confirm_lines.append(f"  {r[1]} {r[2]} {r[3]}")
-                    if no_activity:
-                        confirm_lines.append("\n  休息：" + "、".join(no_activity))
-                    reply = "\n".join(confirm_lines)
+
+            # 情況一：值日生發完整模板（第一行是民國日期）
+            if re.match(r"^1\d{5}$", first_line) and "\n" in text:
+                date_full, date_display, member_data = parse_template_report(text)
+                if date_full:
+                    # 更新最新日期
+                    latest_date[gid] = date_full
+                    if gid not in reported:
+                        reported[gid] = {}
+                    if date_full not in reported[gid]:
+                        reported[gid][date_full] = set()
+
+                    # 寫入有資料的成員
+                    for name, rows in member_data.items():
+                        write_activities_to_sheet(date_full, name, rows if rows else [])
+                        reported[gid][date_full].add(name)
+
+                    # 檢查是否全員到齊
+                    if set(TEAM_MEMBERS) == reported[gid][date_full]:
+                        reply = f"✅ {date_display} 全員活動預報完成！"
+
+            # 情況二：單行接龍（名字：內容）
+            elif re.match(r"^.+?[：:]", text) and "\n" not in text:
+                current_date = latest_date.get(gid)
+                if current_date:
+                    name, rows = parse_single_reply(text, current_date)
+                    if name and rows is None:
+                        # 有內容但格式錯誤
+                        reply = (
+                            "❌ 格式有誤，請重新輸入\n\n"
+                            "正確格式：\n"
+                            "姓名：時間+類型\n"
+                            "例如：\n"
+                            "  一珊：1300需 1830關\n"
+                            "  力緯：0（沒有拜訪）"
+                        )
+                    elif name is not None:
+                        # 寫入
+                        write_activities_to_sheet(current_date, name, rows if rows else [])
+                        if gid not in reported:
+                            reported[gid] = {}
+                        if current_date not in reported[gid]:
+                            reported[gid][current_date] = set()
+                        reported[gid][current_date].add(name)
+
+                        # 檢查是否全員到齊
+                        month_day = current_date[5:]  # "06-05" → 顯示用
+                        display = f"{month_day[0:2]}/{month_day[3:5]}"
+                        if set(TEAM_MEMBERS) == reported[gid][current_date]:
+                            reply = f"✅ {display} 全員活動預報完成！"
 
     if reply:
         with ApiClient(configuration) as api_client:
