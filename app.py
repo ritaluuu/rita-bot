@@ -347,6 +347,7 @@ app = Flask(__name__)
 
 SPREADSHEET_ID = "1Ncy3e8I_OaC3BhTl_SNzJeFWMOQMFuEhaOK8Rl1hUV0"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+TODO_SHEET = "待辦事項"
 
 # ───────────────────────────────────────────────
 # 💪 鼓勵語句
@@ -638,6 +639,127 @@ def query_weekly_stats():
         print(f"Weekly query error: {e}")
         return None, None, None
 
+# ───────────────────────────────────────────────
+# 📝 待辦事項功能
+# ───────────────────────────────────────────────
+
+def get_todo_worksheet():
+    """取得或建立待辦事項分頁"""
+    try:
+        gc = get_sheet_client()
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        try:
+            ws = sh.worksheet(TODO_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=TODO_SHEET, rows=2000, cols=6)
+            ws.append_row(["姓名", "日期", "任務", "建立日期", "完成"])
+        return ws
+    except Exception as e:
+        print(f"Todo sheet error: {e}")
+        return None
+
+def parse_todo_input(text):
+    """
+    解析待辦輸入格式：
+    一珊
+    6/8
+    Call 陳亮羽
+    ✅整理羅月秀保單
+    回傳 (name, date_str, [(task, done), ...])
+    """
+    lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+    if len(lines) < 3:
+        return None, None, []
+
+    name = lines[0].strip()
+    if name not in TEAM_MEMBERS:
+        return None, None, []
+
+    # 第二行是日期，例如 6/8 或 06/08
+    date_line = lines[1].strip()
+    date_match = re.match(r"^(\d{1,2})/(\d{1,2})$", date_line)
+    if not date_match:
+        return None, None, []
+
+    tw_now = datetime.utcnow() + timedelta(hours=8)
+    month = int(date_match.group(1))
+    day = int(date_match.group(2))
+    year = tw_now.year
+    date_str = f"{year}-{month:02d}-{day:02d}"
+
+    tasks = []
+    for line in lines[2:]:
+        if line.startswith("✅"):
+            tasks.append((line[1:].strip(), True))
+        else:
+            tasks.append((line, False))
+
+    return name, date_str, tasks
+
+def save_todos(name, date_str, tasks):
+    """儲存待辦：先刪除同人同日期的舊資料，再寫入"""
+    try:
+        ws = get_todo_worksheet()
+        if not ws:
+            return False
+
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        created_date = tw_now.strftime("%Y-%m-%d")
+
+        # 刪除同人同日期舊資料
+        all_values = ws.get_all_values()
+        to_delete = []
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue
+            if len(row) >= 2 and row[0] == name and row[1] == date_str:
+                to_delete.append(i + 1)
+        for idx in reversed(to_delete):
+            ws.delete_rows(idx)
+
+        # 寫入新資料
+        for task, done in tasks:
+            ws.append_row([name, date_str, task, created_date, "✅" if done else ""])
+        print(f"[Todo] ✅ {name} {date_str} 共{len(tasks)}筆")
+        return True
+    except Exception as e:
+        print(f"[Todo] ❌ {e}")
+        return False
+
+def get_overdue_todos():
+    """取得超過3天未完成的待辦，回傳 {name: [task, ...]}"""
+    try:
+        ws = get_todo_worksheet()
+        if not ws:
+            return {}
+
+        tw_now = datetime.utcnow() + timedelta(hours=8)
+        today = tw_now.date()
+        overdue = {}
+
+        all_values = ws.get_all_values()
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue
+            if len(row) < 5:
+                continue
+            name, date_str, task, created_date, done = row[0], row[1], row[2], row[3], row[4]
+            if done:
+                continue
+            try:
+                created = datetime.strptime(created_date, "%Y-%m-%d").date()
+                days = (today - created).days
+                if days >= 3:
+                    if name not in overdue:
+                        overdue[name] = []
+                    overdue[name].append(f"{task}（{days}天）")
+            except:
+                continue
+        return overdue
+    except Exception as e:
+        print(f"[Todo overdue] ❌ {e}")
+        return {}
+
 GROUP_IDS = [
     "C036387647981e5c83e65884f9b9286b3",
     "Cdd2f9e9d113d33ed44251a4dd45d1ecd",
@@ -763,6 +885,13 @@ def handle_message(event):
 
     elif text == "我的待辦" or text == "待辦事項":
         reply = "📝 功能開發中，敬請期待！\n（未來可查看個人未完成待辦）"
+
+    # 待辦事項輸入（第一行是成員名字）
+    elif text.split("\n")[0].strip() in TEAM_MEMBERS and "\n" in text:
+        name, date_str, tasks = parse_todo_input(text)
+        if name and date_str and tasks:
+            save_todos(name, date_str, tasks)
+            # 靜默，不回覆
 
     # 生日分析（格式：生日：1985/03/15 或 生日分析 1985-03-15）
     elif re.search(r"生日[：:分析\s]*(\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{8})", text):
@@ -930,7 +1059,14 @@ def scheduler():
         # 週日到週四(weekday 0-3, 6) 傍晚17:00 提醒預報
         if tw_hour == 17 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
             send_push(ACTIVITY_GROUP_ID, "請值日生預報明天和後天活動量 gogogo 💪")
-            send_push(TODO_GROUP_ID, "請靜下心來預報明天的待辦事項 gogogo 🙏")
+            # 待辦提醒＋未完成點名
+            todo_msg = "請靜下心來預報明天的待辦事項 gogogo 🙏"
+            overdue = get_overdue_todos()
+            if overdue:
+                todo_msg += "\n\n⏰ 未完成提醒："
+                for name, items in overdue.items():
+                    todo_msg += f"\n{name}：" + "／".join(items)
+            send_push(TODO_GROUP_ID, todo_msg)
 
         # 週日到週四 晚上20:00 缺報點名
         if tw_hour == 20 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
