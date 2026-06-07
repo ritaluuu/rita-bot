@@ -467,30 +467,33 @@ def roc_to_ad(roc_date_str):
 def write_activities_to_sheet(date_full, name, rows):
     """覆蓋寫入：先刪除同日期同人的舊資料，再寫入新資料"""
     try:
+        print(f"[Sheets] 寫入 {date_full} {name} 共{len(rows)}筆")
         gc = get_sheet_client()
         year_month = date_full[:7]  # "2026-06"
         ws = get_or_create_worksheet(gc, year_month)
         if not ws:
+            print(f"[Sheets] 無法取得工作表 {year_month}")
             return False
 
         # 讀取所有資料，找出要刪除的列（從後往前刪）
         all_values = ws.get_all_values()
         rows_to_delete = []
         for i, row in enumerate(all_values):
-            if i == 0:  # 標題列
+            if i == 0:
                 continue
             if len(row) >= 2 and row[0] == date_full and row[1] == name:
-                rows_to_delete.append(i + 1)  # gspread 從1開始
+                rows_to_delete.append(i + 1)
 
         for row_idx in reversed(rows_to_delete):
             ws.delete_rows(row_idx)
 
-        # 寫入新資料（0代表休息，不寫入）
+        # 寫入新資料
         for row in rows:
             ws.append_row(row)
+        print(f"[Sheets] ✅ 寫入成功")
         return True
     except Exception as e:
-        print(f"Write sheet error: {e}")
+        print(f"[Sheets] ❌ 寫入失敗: {e}")
         return False
 
 def parse_template_report(text):
