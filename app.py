@@ -660,41 +660,66 @@ def get_todo_worksheet():
 
 def parse_todo_input(text):
     """
-    解析待辦輸入格式：
-    一珊
+    解析待辦輸入格式（支援多天、分隔線、空行）：
+    致齊
+
     6/8
     Call 陳亮羽
-    ✅整理羅月秀保單
-    回傳 (name, date_str, [(task, done), ...])
+    —————
+    6/5
+    ✅開會
+
+    回傳 (name, [(date_str, [(task, done), ...]), ...])
     """
-    lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-    if len(lines) < 3:
-        return None, None, []
+    lines = [l.strip() for l in text.strip().split("\n")]
 
-    name = lines[0].strip()
-    if name not in TEAM_MEMBERS:
-        return None, None, []
+    # 第一個非空行是名字
+    name = None
+    start_idx = 0
+    for i, line in enumerate(lines):
+        if line:
+            name = line
+            start_idx = i + 1
+            break
 
-    # 第二行是日期，例如 6/8 或 06/08
-    date_line = lines[1].strip()
-    date_match = re.match(r"^(\d{1,2})/(\d{1,2})$", date_line)
-    if not date_match:
-        return None, None, []
+    if not name or name not in TEAM_MEMBERS:
+        return None, []
 
     tw_now = datetime.utcnow() + timedelta(hours=8)
-    month = int(date_match.group(1))
-    day = int(date_match.group(2))
     year = tw_now.year
-    date_str = f"{year}-{month:02d}-{day:02d}"
 
-    tasks = []
-    for line in lines[2:]:
-        if line.startswith("✅"):
-            tasks.append((line[1:].strip(), True))
-        else:
-            tasks.append((line, False))
+    # 剩下的行按日期分組
+    date_blocks = []  # [(date_str, [(task, done)])]
+    current_date = None
+    current_tasks = []
 
-    return name, date_str, tasks
+    for line in lines[start_idx:]:
+        # 分隔線或空行 → 跳過
+        if not line or re.match(r"^[—\-─=＝]+$", line):
+            continue
+
+        # 日期行
+        date_match = re.match(r"^(\d{1,2})/(\d{1,2})$", line)
+        if date_match:
+            if current_date and current_tasks:
+                date_blocks.append((current_date, current_tasks))
+            month = int(date_match.group(1))
+            day = int(date_match.group(2))
+            current_date = f"{year}-{month:02d}-{day:02d}"
+            current_tasks = []
+            continue
+
+        # 任務行
+        if current_date:
+            if line.startswith("✅"):
+                current_tasks.append((line[1:].strip(), True))
+            else:
+                current_tasks.append((line, False))
+
+    if current_date and current_tasks:
+        date_blocks.append((current_date, current_tasks))
+
+    return name, date_blocks
 
 def save_todos(name, date_str, tasks):
     """儲存待辦：先刪除同人同日期的舊資料，再寫入"""
@@ -888,9 +913,10 @@ def handle_message(event):
 
     # 待辦事項輸入（第一行是成員名字）
     elif text.split("\n")[0].strip() in TEAM_MEMBERS and "\n" in text:
-        name, date_str, tasks = parse_todo_input(text)
-        if name and date_str and tasks:
-            save_todos(name, date_str, tasks)
+        name, date_blocks = parse_todo_input(text)
+        if name and date_blocks:
+            for date_str, tasks in date_blocks:
+                save_todos(name, date_str, tasks)
             # 靜默，不回覆
 
     # 生日分析（格式：生日：1985/03/15 或 生日分析 1985-03-15）
