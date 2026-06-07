@@ -806,7 +806,7 @@ def handle_message(event):
             first_line = text.split("\n")[0].strip()
 
             # 情況一：值日生發完整模板（第一行是民國日期）
-            if re.match(r"^1\d{5}$", first_line) and "\n" in text:
+            if re.match(r"^1\d{6}$", first_line) and "\n" in text:
                 date_full, date_display, member_data = parse_template_report(text)
                 if date_full:
                     # 更新最新日期
