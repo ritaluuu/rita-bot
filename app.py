@@ -1012,10 +1012,7 @@ def handle_message(event):
                     if set(TEAM_MEMBERS) == reported[gid][date_full]:
                         completed_dates.append(date_display)
 
-                # 只有所有日期都全員完成才通知
-                if all_dates and set(completed_dates) == set(all_dates):
-                    dates_str = "、".join(all_dates)
-                    reply = f"✅ {dates_str} 全員活動預報完成！"
+                pass  # 靜默，不通知
 
             # 情況二：單行接龍（名字：內容）
             elif re.match(r"^.+?[：:]", text) and "\n" not in text:
@@ -1041,11 +1038,7 @@ def handle_message(event):
                             reported[gid][current_date] = set()
                         reported[gid][current_date].add(name)
 
-                        # 檢查是否全員到齊
-                        month_day = current_date[5:]  # "06-05" → 顯示用
-                        display = f"{month_day[0:2]}/{month_day[3:5]}"
-                        if set(TEAM_MEMBERS) == reported[gid][current_date]:
-                            reply = f"✅ {display} 全員活動預報完成！"
+                        pass  # 靜默，不通知
 
     if reply:
         with ApiClient(configuration) as api_client:
