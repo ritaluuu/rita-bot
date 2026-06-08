@@ -990,14 +990,16 @@ def handle_message(event):
             if re.match(r"^1?\d{6}$", first_line) and "\n" in text:
                 # 支援兩天一起PO：用日期行分割成多個區塊
                 blocks = re.split(r"(?=^1?\d{6}$)", text, flags=re.MULTILINE)
-                blocks = [b.strip() for b in blocks if b.strip()]
+                blocks = [b.strip() for b in blocks if b.strip() and re.match(r"^1?\d{6}", b.split("\n")[0].strip())]
+
+                completed_dates = []
+                all_dates = []
+
                 for block in blocks:
-                    block_first = block.split("\n")[0].strip()
-                    if not re.match(r"^1?\d{6}", block_first):
-                        continue
                     date_full, date_display, member_data = parse_template_report(block)
                     if not date_full:
                         continue
+                    all_dates.append(date_display)
                     latest_date[gid] = date_full
                     if gid not in reported:
                         reported[gid] = {}
@@ -1008,9 +1010,12 @@ def handle_message(event):
                             write_activities_to_sheet(date_full, name, rows)
                             reported[gid][date_full].add(name)
                     if set(TEAM_MEMBERS) == reported[gid][date_full]:
-                        reply = (reply or "") + f"✅ {date_display} 全員活動預報完成！\n"
-                if reply:
-                    reply = reply.strip()
+                        completed_dates.append(date_display)
+
+                # 只有所有日期都全員完成才通知
+                if all_dates and set(completed_dates) == set(all_dates):
+                    dates_str = "、".join(all_dates)
+                    reply = f"✅ {dates_str} 全員活動預報完成！"
 
             # 情況二：單行接龍（名字：內容）
             elif re.match(r"^.+?[：:]", text) and "\n" not in text:
