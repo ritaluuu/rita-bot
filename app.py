@@ -497,9 +497,12 @@ def write_activities_to_sheet(date_full, name, rows):
         for row_idx in reversed(rows_to_delete):
             ws.delete_rows(row_idx)
 
-        # 寫入新資料
-        for row in rows:
-            ws.append_row(row)
+        # 寫入新資料（若無拜訪，寫入一筆休息記錄）
+        if rows:
+            for row in rows:
+                ws.append_row(row)
+        else:
+            ws.append_row([date_full, name, "-", "休"])
         print(f"[Sheets] ✅ 寫入成功")
         return True
     except Exception as e:
