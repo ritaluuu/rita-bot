@@ -1081,7 +1081,7 @@ def scheduler():
 
         # 週日到週四(weekday 0-3, 6) 早上9:00 提醒值日生發模板
         if tw_hour == 9 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
-            send_push(ACTIVITY_GROUP_ID, "📋 值日生請發今明兩天活動預報模板！")
+            send_push(ACTIVITY_GROUP_ID, "📋 值日生請發明後兩天活動預報模板！")
 
         # 週日到週四(weekday 0-3, 6) 傍晚17:00 提醒預報
         if tw_hour == 17 and tw_minute == 0 and tw_weekday in [0, 1, 2, 3, 6]:
